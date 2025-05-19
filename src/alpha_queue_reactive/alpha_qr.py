@@ -42,12 +42,12 @@ class AQR:
             p_race = self.race_model.probability(lob, self.alpha.value)
             p_trader = self.trader.probability(lob, self.alpha.value)
 
-            # We make the decision to trigger a race or not to
             if self.rng.uniform() < p_trader:
                 order = self.trader.order(lob, self.alpha.value)
                 order = self.matching_engine.process_regular_order(order, curr_ts)
                 self.order_queue.append_order(order)
                 
+            # We make the decision to trigger a race or not to
             if self.rng.uniform() < p_race:
                 orders = self.race_model.sample_race(lob, self.alpha.value)
                 orders = self.matching_engine.process_race(orders, curr_ts)

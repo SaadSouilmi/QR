@@ -32,7 +32,7 @@ The matching engine has it\`s own `LimitOrderBook`. I created a little utility t
     ...
 ```
 
-`t_alpha` and `jump_value` is the jumps in alpha unrelated to the orderbook. These jumps would trigger the indepenant races, still need to include that. Also for `p_trader` I should probably add the current position of the trader as a parameter for it's trading probability.
+`t_alpha` and `jump_value`  are jumps in alpha unrelated to the orderbook. These jumps would trigger the indepenant races, still need to include that. Also for `p_trader` I should probably add the current position of the trader as a parameter for it's trading probability.
 
 ```python 
         ...
@@ -79,7 +79,7 @@ If the trader decides to send their order, it takes precedence to races/regular 
             t_alpha, t_reg = float("inf"), float("inf")
         ...
 ```
-If the `order_queue` is empty, that would first imply that there is no race and the trader did not send an order. And also it the matching-engine's orderbook and that of the market should be in sync, I added an `assert`as a sanity check there.
+If the `order_queue` is empty, that would first imply that there is no race and the trader did not send an order. And also it the matching-engine's orderbook and that of the market should be in sync, I added an `assert` as a sanity check there.
 
 
 ```python 

@@ -16,8 +16,7 @@ import matplotlib.pyplot as plt
 import polars as pl
 import numpy as np
 
-from ..utils import pl_select
-
+from .utils import pl_select
 
 def v1_estimation(df: pl.LazyFrame, n_bins: int = 10) -> pl.LazyFrame:
     """Estimate queue-reactive model parameters from LOB data.
@@ -117,29 +116,6 @@ def queue_sizes(df: pl.DataFrame) -> pl.DataFrame:
             choicelist=[pl.col(f"Q_{j}") for j in range(i, 5 + i)],
         ).alias(f"ask_q{i}")
 
-    # bid_q1 = pl_select(
-    #     condlist=[pl.col("best_bid_nbr").eq(i) for i in range(-10, 0)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(-10, 0)],
-    # ).alias("bid_q1")
-
-    # bid_q2 = pl_select(
-    #     condlist=[pl.col("best_bid_nbr").eq(i) for i in range(-9, 0)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(-10, 1)],
-    # ).alias("bid_q2")
-
-    # ask_q1 = pl_select(
-    #     condlist=[pl.col("best_ask_nbr").eq(i) for i in range(1, 10)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(1, 10)],
-    # ).alias("ask_q1")
-
-    # ask_q2 = pl_select(
-    #     condlist=[pl.col("best_ask_nbr").eq(i) for i in range(1, 9)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(2, 10)],
-    # ).alias("ask_q2")
-
-    # exprs = [bid_q2, bid_q1, ask_q1, ask_q2]
-    # names = ["bid_q2", "bid_q1", "ask_q1", "ask_q2"]
-
     global_max = df.select([expr.max() for expr in queues.values()]).max().row(0)[0]
     full_range = pl.DataFrame({"value": pl.arange(0, global_max + 1, eager=True)})
     for name, expr in queues.items():
@@ -175,7 +151,7 @@ class QRParams:
 
     def __init__(
         self,
-        data_dir: str = os.path.join(os.getenv("LOBIB_DATA"), "QR/v1/"),
+        data_dir: str,
     ) -> None:
         self.data_dir = data_dir
         self.raw_dir = os.path.join(self.data_dir, "raw/")
