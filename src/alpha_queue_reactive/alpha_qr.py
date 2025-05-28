@@ -1,6 +1,6 @@
 import numpy as np
 
-from .orderbook import LimitOrderBook
+from .orderbook import LimitOrderBook, Side
 from .matching_engine import OrderQueue, MatchingEngine
 from .alpha import Alpha
 from .buffer import Buffer
@@ -34,6 +34,7 @@ class AQR:
         self.matching_engine.lob = copy_lob(lob)
         self.order_queue.clear()
         self.alpha.initialise(lob)
+        self.trader.curr_pos = 0
         curr_ts = 0
 
         while curr_ts <= max_ts:
@@ -42,23 +43,32 @@ class AQR:
             p_race = self.race_model.probability(lob, self.alpha.value)
             p_trader = self.trader.probability(lob, self.alpha.value)
 
+            race_orders = []
+            # We make the decision to trigger a race or not to
             if self.rng.uniform() < p_trader:
                 order = self.trader.order(lob, self.alpha.value)
-                order = self.matching_engine.process_regular_order(order, curr_ts)
-                self.order_queue.append_order(order)
+                race_orders.append(order)
+                # order = self.matching_engine.process_regular_order(order, curr_ts)
+                # self.order_queue.append_order(order)
                 
-            # We make the decision to trigger a race or not to
             if self.rng.uniform() < p_race:
                 orders = self.race_model.sample_race(lob, self.alpha.value)
-                orders = self.matching_engine.process_race(orders, curr_ts)
-                self.order_queue.append_order(orders)
-
+                race_orders.extend(orders)
+                # orders = self.matching_engine.process_race(orders, curr_ts)
+                # self.order_queue.append_order(orders)
+            
             # If no race sample a regular order
             else:
-                if self.order_queue.has_regular_order:
-                    continue
-                t_reg = self.qr_model.sample_deltat(lob)
-                order_reg = self.qr_model.sample_order(lob, self.alpha.value)
+                if not self.order_queue.has_regular_order:
+                    t_reg = self.qr_model.sample_deltat(lob)
+                    order_reg = self.qr_model.sample_order(lob, self.alpha.value)
+            
+            if len(race_orders) > 0:
+                # Maybe add an extra shuffle step ? so that the trader is not always first
+                race_orders = self.matching_engine.process_race(race_orders, curr_ts)
+                self.order_queue.append_order(race_orders)
+                if race_orders[0].trader_id == self.trader.trader_id and not race_orders[0].rejected:
+                    self.trader.curr_pos += (2*(race_orders[0].side is Side.A) - 1) * race_orders[0].size
 
             # If the order queue is empty
             if self.order_queue.empty:
@@ -68,7 +78,9 @@ class AQR:
                 ), "Lob and ME do not match"
                 if t_alpha < t_reg:
                     curr_ts += t_alpha
-                    orders = self.race_model.sample_race(lob, self.alpha.value)
+                    self.alpha.value = jump_value
+                    p_race = self.alpha.race_model.probability(lob, self.alpha.value)
+                    orders = self.alpha.race_model.sample_race(lob, self.alpha.value)
                     orders = self.matching_engine.process_race(orders, curr_ts)
                     self.order_queue.append_order(orders)
                 else:
@@ -91,14 +103,15 @@ class AQR:
             elif t_alpha < t_reg:
                 curr_ts += t_alpha
                 self.alpha.value = jump_value
-                orders = self.race_model.sample_race(lob, self.alpha.value)
-                orders = self.matching_engine.process_race(orders, curr_ts)
-                self.order_queue.append_order(orders)
+                p_race = self.alpha.race_model.probability(lob, self.alpha.value)
+                if self.rng.uniform() < p_race:
+                    orders = self.alpha.race_model.sample_race(lob, self.alpha.value)
+                    orders = self.matching_engine.process_race(orders, curr_ts)
+                    self.order_queue.append_order(orders)
             else:
-                if self.order_queue.has_regular_order:
-                    continue 
-                order_reg = self.matching_engine.process_regular_order(
-                    order_reg, curr_ts + t_reg
-                )
-                curr_ts += t_reg
-                self.order_queue.append_order(order_reg)
+                if not self.order_queue.has_regular_order:
+                    order_reg = self.matching_engine.process_regular_order(
+                        order_reg, curr_ts + t_reg
+                    )
+                    curr_ts += t_reg
+                    self.order_queue.append_order(order_reg)

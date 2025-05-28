@@ -1,28 +1,3 @@
-"""I use this module to parse config files for slurm jobs. Example:
-{
-    "ticker": "AAL",
-    "alpha": "imbalance",
-    "matching_engine": {
-        "l1": 1847,
-        "l2": 1830,
-        "delta": 30000,
-        "gamma": 0.2
-    },
-    "race_model": {
-        "type": "no_race",
-        "params": {}
-    },
-    "trader": {
-        "trader_id": 1,
-        "max_spread": 1,
-        "max_volume": 1,
-        "alpha_threshold": 0.7,
-        "probability_": 0.25
-    }
-}
-"""
-
-
 import json
 
 import numpy as np
@@ -33,7 +8,7 @@ from .distributions import DiscreteDistribution, ConstantDistribution
 from .race import Race, NoRace, SimpleRace
 from .trader import Trader
 from .matching_engine import MatchingEngine
-from .alpha import Alpha, ImbalanceAlpha
+from .alpha import Alpha, ImbalanceAlpha, ImbalanceWithJumps
 
 
 def read_config(path: str) -> dict:
@@ -106,9 +81,12 @@ def init_matching_engine(
     )
 
 
-def init_alpha(type: str) -> Alpha:
-    if type == "imbalance":
-        return ImbalanceAlpha()
+def init_alpha(params: dict, rng: np.random.Generator) -> Alpha:
+    match params["type"]:
+        case "imbalance":
+            return ImbalanceAlpha()
+        case "imbalance_with_jumps":
+            return ImbalanceWithJumps(params["params"]["lamda"], init_race(params["params"]["race_params"], rng=rng), rng=rng)
 
 
 def init_race(params: dict, rng: np.random.Generator) -> Race:
@@ -127,7 +105,7 @@ def parse_config(
     config: dict, loader: QRParams, model_rng: np.random.Generator
 ) -> dict:
     return {
-        "alpha": init_alpha(config["alpha"]),
+        "alpha": init_alpha(config["alpha"], model_rng),
         "matching_engine": init_matching_engine(
             loader, config["ticker"], config["matching_engine"], model_rng
         ),

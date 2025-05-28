@@ -108,6 +108,6 @@ If the `order_queue` is empty, that would first imply that there is no race and 
             self.order_queue.append_order(order_reg)
 ```
 
-And finally here, in case there is an order in the queue I execute it against the market's orderbook in case it's received before the pending regular order/alpha jump. Otherwise I just go on with whatever event comes first. One thing that I added recently is the `self.order_queue.has_regular_order` check which helps me ensure the queue has only one regular order at a time. It is a bit of a costly check and adds quite a bit of overhead but it was an easy fix to a situation where I would append to the order queue an order that is received by the market before the order at the far left(top) of the order queue. Another fix would be to make the order queue a `SortedDict` where the key is the `dt` the time an order hits the market, I should probably try that.
+And finally here, in case there is an order in the queue I execute it against the market's orderbook in case it's received before the pending regular order/alpha jump. Otherwise I just go on with whatever event comes first. One thing that I added recently is the `self.order_queue.has_regular_order` check which helps me ensure the queue has only one regular order at a time. 
 
 I haven't written an extensive documentation or docstrings yet, but I hope this little explanation helps a bit. I have included a notebook with a little example.

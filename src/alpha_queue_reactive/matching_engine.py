@@ -29,13 +29,14 @@ class OrderQueue:
     def append_order(self, order: Order | Iterable[Order]) -> None:
         if isinstance(order, Iterable):
             self.queue.extend(order)
-            self.regular_order_count += 1
         else:
             self.queue.append(order)
+            if order.trader_id == 0 and order.race == 0:
+                self.regular_order_count += 1
 
     def pop_order(self) -> Order:
         order = self.queue.popleft()
-        if not order.race:
+        if order.race == 0 and order.trader_id == 0:
             self.regular_order_count -= 1
         return order
 
@@ -74,7 +75,9 @@ class MatchingEngine:
 
     def process_race(self, orders: List[Order], curr_ts: int) -> List[Order]:
         processed_orders = deque()
-        gammas = self.gamma.sample(n=len(orders)).cumsum() + self.delta.sample()
+        gammas = self.gamma.sample(n=len(orders)).cumsum()
+        gammas[0] = 0
+        gammas += self.delta.sample()
         for order, gamma in zip(orders, gammas):
             order.ts = curr_ts
             order.xt = curr_ts + self.l1

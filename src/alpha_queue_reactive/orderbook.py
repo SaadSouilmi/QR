@@ -173,7 +173,7 @@ class Order(ABC):
     dt: int = 0  # timestamp update reaches market participants
     partial: bool = False  # whether the order wall partiall filled
     rejected: bool = False  # whether the order was rejected all together
-    race: bool = False  # whether the order is from a race
+    race: int = 0  # whether the order is from a race
     trader_id: int = 0  # trader id 1 for informed trader and 0 for other participants
 
     @property

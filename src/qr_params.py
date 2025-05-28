@@ -11,12 +11,37 @@ queue-reactive model. It includes:
 import os
 from glob import glob
 from itertools import starmap
+from functools import reduce
 
 import matplotlib.pyplot as plt
 import polars as pl
 import numpy as np
 
-from .utils import pl_select
+
+def pl_select(condlist: list[pl.Expr], choicelist: list[pl.Expr]) -> pl.Expr:
+    """Implement numpy's select functionality for Polars expressions.
+
+    This function provides similar functionality to numpy.select() but for Polars
+    expressions, allowing conditional selection based on multiple conditions.
+
+    Args:
+        condlist (list[pl.Expr]): List of conditions as Polars expressions
+        choicelist (list[pl.Expr]): List of values to choose from when conditions are met
+
+    Returns:
+        pl.Expr: A Polars expression that evaluates to values from choicelist based on
+            the first condition in condlist that evaluates to True
+
+    Note:
+        Similar to numpy.select (https://numpy.org/doc/stable/reference/generated/numpy.select.html)
+        but implemented for Polars expressions
+    """
+    return reduce(
+        lambda expr, cond_choice: expr.when(cond_choice[0]).then(cond_choice[1]),
+        zip(condlist, choicelist),
+        pl.when(condlist[0]).then(choicelist[0]),
+    )
+
 
 def v1_estimation(df: pl.LazyFrame, n_bins: int = 10) -> pl.LazyFrame:
     """Estimate queue-reactive model parameters from LOB data.
@@ -115,6 +140,29 @@ def queue_sizes(df: pl.DataFrame) -> pl.DataFrame:
             condlist=[pl.col("best_ask_nbr").eq(j) for j in range(1, 6)],
             choicelist=[pl.col(f"Q_{j}") for j in range(i, 5 + i)],
         ).alias(f"ask_q{i}")
+
+    # bid_q1 = pl_select(
+    #     condlist=[pl.col("best_bid_nbr").eq(i) for i in range(-10, 0)],
+    #     choicelist=[pl.col(f"Q_{i}") for i in range(-10, 0)],
+    # ).alias("bid_q1")
+
+    # bid_q2 = pl_select(
+    #     condlist=[pl.col("best_bid_nbr").eq(i) for i in range(-9, 0)],
+    #     choicelist=[pl.col(f"Q_{i}") for i in range(-10, 1)],
+    # ).alias("bid_q2")
+
+    # ask_q1 = pl_select(
+    #     condlist=[pl.col("best_ask_nbr").eq(i) for i in range(1, 10)],
+    #     choicelist=[pl.col(f"Q_{i}") for i in range(1, 10)],
+    # ).alias("ask_q1")
+
+    # ask_q2 = pl_select(
+    #     condlist=[pl.col("best_ask_nbr").eq(i) for i in range(1, 9)],
+    #     choicelist=[pl.col(f"Q_{i}") for i in range(2, 10)],
+    # ).alias("ask_q2")
+
+    # exprs = [bid_q2, bid_q1, ask_q1, ask_q2]
+    # names = ["bid_q2", "bid_q1", "ask_q1", "ask_q2"]
 
     global_max = df.select([expr.max() for expr in queues.values()]).max().row(0)[0]
     full_range = pl.DataFrame({"value": pl.arange(0, global_max + 1, eager=True)})
