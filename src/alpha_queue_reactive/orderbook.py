@@ -208,9 +208,7 @@ class Order(ABC):
 
 @dataclass
 class Add(Order):
-    @property
-    def action(self) -> str:
-        return "Add"
+    action: str = "Add"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         lob.bid[self.price] += self.size
@@ -221,9 +219,7 @@ class Add(Order):
 
 @dataclass
 class Cancel(Order):
-    @property
-    def action(self) -> str:
-        return "Cancel"
+    action: str = "Can"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         if self.rejected:
@@ -256,9 +252,7 @@ class Cancel(Order):
 
 @dataclass
 class Trade(Order):
-    @property
-    def action(self) -> str:
-        return "Trade"
+    action: str = "Trd"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         if self.rejected:
@@ -309,9 +303,7 @@ class Trade(Order):
 
 @dataclass
 class TradeAll(Order):
-    @property
-    def action(self) -> str:
-        return "Trade_All"
+    action: str = "Trd_All"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         if self.rejected:
@@ -354,9 +346,7 @@ class TradeAll(Order):
 
 @dataclass
 class Create_Ask(Order):
-    @property
-    def action(self) -> str:
-        return "Create_Ask"
+    action: str = "Create_Ask"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         raise NotImplementedError
@@ -376,9 +366,7 @@ class Create_Ask(Order):
 
 @dataclass
 class Create_Bid(Order):
-    @property
-    def action(self) -> str:
-        return "Create_Bid"
+    action: str = "Create_Bid"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         assert (self.price not in lob.ask) and (self.price not in lob.bid)

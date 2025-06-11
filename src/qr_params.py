@@ -141,29 +141,6 @@ def queue_sizes(df: pl.DataFrame) -> pl.DataFrame:
             choicelist=[pl.col(f"Q_{j}") for j in range(i, 5 + i)],
         ).alias(f"ask_q{i}")
 
-    # bid_q1 = pl_select(
-    #     condlist=[pl.col("best_bid_nbr").eq(i) for i in range(-10, 0)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(-10, 0)],
-    # ).alias("bid_q1")
-
-    # bid_q2 = pl_select(
-    #     condlist=[pl.col("best_bid_nbr").eq(i) for i in range(-9, 0)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(-10, 1)],
-    # ).alias("bid_q2")
-
-    # ask_q1 = pl_select(
-    #     condlist=[pl.col("best_ask_nbr").eq(i) for i in range(1, 10)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(1, 10)],
-    # ).alias("ask_q1")
-
-    # ask_q2 = pl_select(
-    #     condlist=[pl.col("best_ask_nbr").eq(i) for i in range(1, 9)],
-    #     choicelist=[pl.col(f"Q_{i}") for i in range(2, 10)],
-    # ).alias("ask_q2")
-
-    # exprs = [bid_q2, bid_q1, ask_q1, ask_q2]
-    # names = ["bid_q2", "bid_q1", "ask_q1", "ask_q2"]
-
     global_max = df.select([expr.max() for expr in queues.values()]).max().row(0)[0]
     full_range = pl.DataFrame({"value": pl.arange(0, global_max + 1, eager=True)})
     for name, expr in queues.items():
@@ -452,6 +429,9 @@ class QRParams:
         """
         estimations = self.load_estimations(ticker, start_date, end_date)
         estimations = estimations.with_columns(
+            pl.col("event").replace({"Trd_All": "Trd"})
+        ) # Remove Trd_All
+        estimations = estimations.with_columns(
             time=pl.col("time").str.replace("30", "00")
         )
 
@@ -549,6 +529,33 @@ class QRParams:
         average_event_size = (
             df.group_by(["event_side", "event_queue_nbr"])
             .agg(pl.col("event_size").mean().ceil().cast(int))
+        )
+        average_event_size = average_event_size.filter(
+            (pl.col("event_side").eq("B") & pl.col("event_queue_nbr").lt(0))
+            | (pl.col("event_side").eq("A") & pl.col("event_queue_nbr").gt(0))
+        )
+        return average_event_size.sort(by="event_queue_nbr")
+
+    def compute_mes(
+        self,
+        ticker: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pl.DataFrame:
+        """Compute median event sizes.
+
+        Args:
+            ticker: Instrument symbol
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+
+        Returns:
+            DataFrame containing median event sizes
+        """
+        df = self.load_raw_files(ticker, start_date, end_date)
+        df = df.filter(pl.col("spread").le(2))
+        average_event_size = df.group_by(["event_side", "event_queue_nbr"]).agg(
+            pl.col("event_size").median().ceil().cast(int)
         )
         average_event_size = average_event_size.filter(
             (pl.col("event_side").eq("B") & pl.col("event_queue_nbr").lt(0))

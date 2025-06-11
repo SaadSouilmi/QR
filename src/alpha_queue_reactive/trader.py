@@ -12,10 +12,12 @@ class Trader:
     max_pos: int
     curr_pos: int = 0
     probability_: float = 0.25
+    cooldown: int = 10
+    can_trade: int = 1
 
     def send_order(self, lob: LimitOrderBook, alpha: float) -> bool:
-        send_ask = alpha > self.alpha_threshold and self.curr_pos < self.max_pos 
-        send_bid = alpha < - self.alpha_threshold and self.curr_pos > -self.max_pos
+        send_ask = alpha > self.alpha_threshold and self.curr_pos < self.max_pos and self.can_trade
+        send_bid = alpha < - self.alpha_threshold and self.curr_pos > -self.max_pos and self.can_trade
         return (
             lob.spread <= self.max_spread
             and (send_ask or send_bid)
@@ -25,10 +27,14 @@ class Trader:
         return self.send_order(lob, alpha) * self.probability_
 
     def order(self, lob: LimitOrderBook, alpha: float) -> Trade:
+        side = Side.A if alpha > 0 else Side.B
+        price = lob.best_ask_price if alpha > 0 else lob.best_bid_price
+        remaining_pos = self.max_pos - self.curr_pos if side == Side.A else self.max_pos + self.curr_pos
+        size = min(self.max_volume, remaining_pos)
         return Trade(
-            side=Side.A if alpha > 0 else Side.B,
-            price=lob.best_ask_price if alpha > 0 else lob.best_bid_price,
-            size=self.max_volume,
+            side=side,
+            price=price,
+            size=size,
             imbalance=lob.imbalance,
             spread=lob.spread,
             alpha=alpha,

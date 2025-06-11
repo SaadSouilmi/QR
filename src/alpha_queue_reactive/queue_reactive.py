@@ -27,18 +27,21 @@ class QRModel(ABC):
     def sample_order(self, lob: LimitOrderBook) -> Order:
         raise NotImplementedError
 
-
-class FixedSizeQR(QRModel):
+class ImbalanceQR(QRModel):
     def __init__(
         self,
-        intensities: dict[tuple[int, int], ExpDistribution],
-        probabilities: dict[tuple[int, int], DiscreteDistribution],
+        deltat_distrib: dict[tuple[int, int], ExpDistribution],
+        event_distrib: dict[tuple[int, int], DiscreteDistribution],
+        order_volumes_distrib: dict[tuple[str, int], dict[tuple[int, int], DiscreteDistribution]],
         imbalance_bins: np.ndarray,
+        offset: int,
         rng: np.random.Generator = np.random.default_rng(1337),
     ) -> None:
-        self.intensities = intensities
-        self.probabilities = probabilities
+        self.deltat_distrib = deltat_distrib
+        self.event_distrib = event_distrib
         self.imbalance_bins = imbalance_bins
+        self.order_volumes_distrib = order_volumes_distrib
+        self.offset = offset
         self.rng = rng
 
     def map_imbalance_bin(self, imbalance: float) -> float:
@@ -46,13 +49,13 @@ class FixedSizeQR(QRModel):
 
     def sample_deltat(self, lob: LimitOrderBook) -> int:
         state = (self.map_imbalance_bin(lob.imbalance), min(lob.spread, 2))
-        return self.intensities[state].sample().item()
+        return self.deltat_distrib[state].sample().item() + self.offset
 
     def sample_order(self, lob: LimitOrderBook, alpha: float) -> Order:
         if lob.spread > 1:
             state = (self.map_imbalance_bin(lob.imbalance), 2)
             order_type, order_side, order_queue = (
-                self.probabilities[state].sample().flatten()
+                self.event_distrib[state].sample().flatten()
             )
             if lob.spread % 2 == 0:
                 available_queues = np.arange(-(lob.spread // 2) + 1, lob.spread // 2)
@@ -64,11 +67,13 @@ class FixedSizeQR(QRModel):
                     )
                 )
             order_queue = self.rng.choice(available_queues)
-            order = (order_type, order_side, order_queue)
+            order_size = self.order_volumes_distrib[(order_type.item(), Side[order_side].value)][state].sample().item()
         else:
             state = (self.map_imbalance_bin(lob.imbalance), lob.spread)
-            order = self.probabilities[state].sample().flatten()
-
+            order_type, order_side, order_queue = self.event_distrib[state].sample().flatten()
+            order_size = self.order_volumes_distrib[(order_type.item(), int(order_queue))][state].sample().item()
+            
+        order = (order_type, order_side, order_queue, order_size)
         return self.create_order(order, lob, alpha)
 
     def create_order(
@@ -81,7 +86,7 @@ class FixedSizeQR(QRModel):
             ask=deepcopy(lob.ask),
             bid=deepcopy(lob.bid),
         )
-        order_type, order_side, order_queue = order
+        order_type, order_side, order_queue, order_size = order
         order_queue = order_queue.astype(int).item()
         match order_side:
             case "B":
@@ -99,62 +104,15 @@ class FixedSizeQR(QRModel):
 
         match order_type:
             case "Add":
-                return Add(side=Side[order_side], price=price, size=1, **state)
+                return Add(side=Side[order_side], price=price, size=order_size, **state)
             case "Can":
-                return Cancel(side=Side[order_side], price=price, size=1, **state)
+                return Cancel(side=Side[order_side], price=price, size=order_size, **state)
             case "Trd":
-                return Trade(side=Side[order_side], price=price, size=1, **state)
+                return Trade(side=Side[order_side], price=price, size=order_size, **state)
             case "Trd_All":
-                return TradeAll(side=Side[order_side], price=price, size=1, **state)
+                return TradeAll(side=Side[order_side], price=price, size=order_size, **state)
             case "Create_Ask":
-                return Create_Ask(side=Side[order_side], price=price, size=1, **state)
+                return Create_Ask(side=Side[order_side], price=price, size=order_size, **state)
             case "Create_Bid":
-                return Create_Bid(side=Side[order_side], price=price, size=1, **state)
+                return Create_Bid(side=Side[order_side], price=price, size=order_size, **state)
 
-
-def init_fixed_size_qr(
-    intensities: pl.DataFrame,
-    probabilities: pl.DataFrame,
-    rng: np.random.Generator,
-) -> FixedSizeQR:
-    """Since we consider large tick assets, we assume the spread tightens immediatly if
-    it is greater than 1."""
-
-    imbalance_bins = np.sort(probabilities["imbalance_left"].unique().to_numpy())
-    intensities = intensities.with_columns(
-        imbalance_bins=pl.col("imbalance_left").map_elements(
-            lambda x: np.digitize(x, imbalance_bins), return_dtype=int
-        )
-    )
-    intensities_dict = {
-        (row["imbalance_bins"], row["spread"]): ExpDistribution(
-            lamda=row["lambda"], rng=rng
-        )
-        for row in intensities.to_dicts()
-    }
-
-    probabilities = probabilities.with_columns(
-        imbalance_bins=pl.col("imbalance_left").map_elements(
-            lambda x: np.digitize(x, imbalance_bins), return_dtype=int
-        )
-    )
-    grouped = probabilities.group_by(["imbalance_bins", "spread"]).agg(
-        [
-            pl.col("event").alias("events"),
-            pl.col("event_side").alias("event_sides"),
-            pl.col("event_queue_nbr").alias("event_queue_nbrs"),
-            pl.col("probability").alias("probability"),
-        ]
-    )
-    probabilities_dict = {
-        (row["imbalance_bins"], row["spread"]): DiscreteDistribution(
-            values=list(
-                zip(row["events"], row["event_sides"], row["event_queue_nbrs"])
-            ),
-            probabilities=row["probability"],
-            rng=rng,
-        )
-        for row in grouped.to_dicts()
-    }
-
-    return FixedSizeQR(intensities_dict, probabilities_dict, imbalance_bins, rng=rng)

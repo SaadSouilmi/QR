@@ -12,6 +12,7 @@ from .trader import Trader
 
 class Buffer:
     schema = {
+        "sequence": pl.Int64,
         "ts": pl.Int64,
         "xt": pl.Int64,
         "dt": pl.Int64,
@@ -26,6 +27,7 @@ class Buffer:
         "rejected": pl.Boolean,
         "race": pl.Int8,
         "trader_id": pl.Int8,
+        "trader_pos": pl.Int64,
         **{
             key: pl.Int64
             for key in [
@@ -65,11 +67,12 @@ class Buffer:
         self.checkpoint_nbr += 1
         print(f"Checkpoint saved to {path}")
 
-    def record(self, lob: LimitOrderBook, alpha: Alpha, order: Order) -> None:
+    def record(self, lob: LimitOrderBook, alpha: Alpha, order: Order, trader: Trader, sequence: int) -> None:
         if self.save_checkpoints and len(self.columns["ts"]) >= self.max_size:
             self.save_checkpoint()
             self.clear_buffer()
 
+        self.columns["sequence"].append(sequence)
         self.columns["ts"].append(order.ts)
         self.columns["xt"].append(order.xt)
         self.columns["dt"].append(order.dt)
@@ -84,6 +87,7 @@ class Buffer:
         self.columns["rejected"].append(order.rejected)
         self.columns["race"].append(order.race)
         self.columns["trader_id"].append(order.trader_id)
+        self.columns["trader_pos"].append(trader.curr_pos)
         for i in range(-4, 0):
             p_event, q_event = order.bid.peekitem(4+i)
             p_recv, q_recv = lob.bid.peekitem(4+i)

@@ -26,13 +26,13 @@ class OrderQueue:
     def has_regular_order(self) -> bool:
         return self.regular_order_count > 0
 
-    def append_order(self, order: Order | Iterable[Order]) -> None:
-        if isinstance(order, Iterable):
-            self.queue.extend(order)
-        else:
-            self.queue.append(order)
-            if order.trader_id == 0 and order.race == 0:
-                self.regular_order_count += 1
+    def append_order(self, order: Order, regular_order: bool=False) -> None:
+        self.queue.append(order)
+        if regular_order:
+            self.regular_order_count += 1
+        
+    def append_race(self, order: Iterable[Order]) -> None:
+        self.queue.extend(order)
 
     def pop_order(self) -> Order:
         order = self.queue.popleft()
