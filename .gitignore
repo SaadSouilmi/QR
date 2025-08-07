@@ -4,3 +4,4 @@ tmp/
 backup/
 data/
 data.tar.gz.gpg
+.venv/
