@@ -2,51 +2,12 @@ import numpy as np
 
 from .alpha import Alpha
 from .buffer import Buffer
+from .impact import SQRTImpact
 from .matching_engine import MatchingEngine, OrderQueue
-from .orderbook import Add, LimitOrderBook, Order, Side, Trade
+from .orderbook import LimitOrderBook, Side, process_marketable_limit_order
 from .queue_reactive import QRModel
 from .race import ExternalEvent, Race
 from .trader import Trader
-from .utils import copy_lob
-
-
-def process_marketable_limit_order(
-    lob: LimitOrderBook, order: Order
-) -> tuple[Order, Order]:
-    order.adjust_price(lob)
-    limit_order_side = Side.B if order.side == Side.A else Side.A
-    can_trade = (order.side == Side.B and order.price == lob.best_bid_price) or (
-        order.side == Side.A and order.price == lob.best_ask_price
-    )
-
-    if not can_trade:
-        limit_order_size = order.size
-        market_order_size = 0
-    else:
-        market_order_size = (
-            lob.best_bid_volume if order.side == Side.B else lob.best_ask_volume
-        )
-        market_order_size = min(market_order_size, order.size)
-        limit_order_size = order.size - market_order_size
-
-    market_order_rejected = market_order_size == 0
-    limit_order_rejected = limit_order_size == 0
-
-    market_order = Trade(
-        **(vars(order) | {"size": market_order_size, "rejected": market_order_rejected})
-    )
-    limit_order = Add(
-        **(
-            vars(order)
-            | {
-                "size": limit_order_size,
-                "side": limit_order_side,
-                "rejected": limit_order_rejected,
-            }
-        )
-    )
-
-    return market_order, limit_order
 
 
 class AQR:
@@ -58,6 +19,7 @@ class AQR:
         matching_engine: MatchingEngine,
         race_model: Race,
         external_event_model: ExternalEvent,
+        impact_model: SQRTImpact,
         trader: Trader,
         rng: np.random.Generator = np.random.default_rng(1337),
     ) -> None:
@@ -66,13 +28,13 @@ class AQR:
         self.matching_engine = matching_engine
         self.race_model = race_model
         self.external_event_model = external_event_model
+        self.impact_model = impact_model
         self.trader = trader
         self.order_queue = OrderQueue()
         self.rng = rng
 
     def sample(self, lob: LimitOrderBook, max_ts: int, buffer: Buffer) -> None:
         # Initialise state
-        self.matching_engine.lob = copy_lob(lob)
         self.order_queue.clear()
         self.alpha.eps = None
         self.alpha.initialise(lob)
@@ -82,6 +44,9 @@ class AQR:
         t_alpha = self.alpha.sample_jump()
 
         while curr_ts <= max_ts:
+            self.qr_model.adjust_event_distrib(
+                self.alpha.eps if self.alpha.eps else 0, self.impact_model.value, exclude_cancels=True
+            )
             t_reg = (
                 self.qr_model.sample_deltat(lob)
                 if not self.order_queue.has_regular_order
@@ -108,7 +73,6 @@ class AQR:
                 curr_ts = t_alpha
                 self.alpha.update_eps()
                 self.alpha.compute_value()
-                self.qr_model.adjust_event_distrib(self.alpha.eps, exclude_cancels=False)
                 t_alpha += self.alpha.sample_jump()
             elif external_race:
                 curr_ts = t_external_event
@@ -129,19 +93,24 @@ class AQR:
 
                     market_order = lob.process_order(market_order)
                     buffer.record(lob, self.alpha, market_order, self.trader, sequence)
-                    sequence += 1
                     limit_order = lob.process_order(limit_order)
                     buffer.record(lob, self.alpha, limit_order, self.trader, sequence)
-                    sequence += 1
+                    sequence += 1 # both have the same sequence
+                    if not market_order.rejected:
+                        self.impact_model.update(market_order.dt, market_order.side.value)
                     if limit_order.trader_id == 0 and not limit_order.rejected:
                         self.trader.can_trade += 1
                 else:
                     pending_order = lob.process_order(pending_order)
                     buffer.record(lob, self.alpha, pending_order, self.trader, sequence)
                     sequence += 1
-                    if pending_order.trader_id == 0 and not pending_order.rejected:
+                    if pending_order.rejected: # No new information
+                        continue 
+                    if pending_order.action == "Trd":
+                        self.impact_model.update(pending_order.dt, pending_order.side.value)
+                    if pending_order.trader_id == 0:
                         self.trader.can_trade += 1
-                    if pending_order.trader_id == 1 and not pending_order.rejected:
+                    if pending_order.trader_id == 1:
                         self.trader.curr_pos += (
                             pending_order.size if pending_order.side == Side.A else -pending_order.size
                         )

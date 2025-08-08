@@ -4,14 +4,28 @@ import numpy as np
 import polars as pl
 from sortedcontainers import SortedDict
 
-from ..qr_params import QRParams, pl_select
-from .distributions import DiscreteDistribution, ConstantDistribution, ExpDistribution
-from .race import Race, NoRace, SimpleRace, ExternalEvent, NoEvent, ExpEvent
-from .trader import Trader
-from .matching_engine import MatchingEngine
+from .utils import pl_select
+from .qr_params import QRParams
 from .alpha import Alpha, ImbalanceAlpha, ImbalanceWithJumps
-from .queue_reactive import ImbalanceQR
+from .distributions import (
+    ConstantDistribution,
+    DiscreteDistribution,
+    ExpDistribution,
+)
+from .impact import SQRTImpact
+from .matching_engine import MatchingEngine
 from .orderbook import LimitOrderBook
+from .queue_reactive import ImbalanceQR
+from .race import (
+    ExpEvent,
+    ExternalEvent,
+    GammaEvent,
+    NoEvent,
+    NoRace,
+    Race,
+    SimpleRace,
+)
+from .trader import Trader
 from .utils import compute_inv_distributions
 
 
@@ -44,7 +58,7 @@ def gamma_distribution(
     # deltat = deltat.with_columns(pl.col("deltat").floordiv(1000)) # convert to micros 
     deltat = deltat.filter(pl.col("deltat").gt(0))
     deltat = deltat.filter(
-        pl.col("deltat").le(pl.col("deltat").quantile(quantile))
+        pl.col("deltat").le(pl.col("deltat").quantile(quantile)) & pl.col("deltat").ge(4000)
     ).collect()
     gamma = (
         pl.DataFrame(
@@ -290,9 +304,10 @@ def init_conditional_order_volumes_distrib(
     return order_volumes_distrib
 
 def init_deltat_distrib(
-    loader: QRParams, ticker: str, bin_edges: np.ndarray, rng: np.random.Generator
+    loader: QRParams, ticker: str, bin_edges: np.ndarray, offset: float, rng: np.random.Generator
 ) -> dict[tuple[int, int], DiscreteDistribution]:
     intensities = loader.compute_intensity(ticker, max_spread=2)
+    intensities = intensities.with_columns(pl.col("lambda").mul(offset))
     intensities = intensities.with_columns(
         imbalance_bins=pl.col("imbalance_left").map_elements(
             lambda x: np.digitize(x, bin_edges[:-1]), return_dtype=int
@@ -350,7 +365,7 @@ def init_event_distrib(
         for row in grouped.to_dicts()
     }
 
-    return event_distrib
+    return probabilities, event_distrib
 
 def init_imbalance_qr_model(
     loader: QRParams, ticker: str, offset: int, rng: np.random.Generator
@@ -358,14 +373,15 @@ def init_imbalance_qr_model(
     N_BINS = 10
     BIN_EDGES = 2 * np.arange(N_BINS + 1) / N_BINS - 1
 
+    probabilities, event_distrib = init_event_distrib(loader, ticker, BIN_EDGES, rng)
     return ImbalanceQR(
-        deltat_distrib=init_deltat_distrib(loader, ticker, BIN_EDGES, rng),
-        event_distrib=init_event_distrib(loader, ticker, BIN_EDGES, rng),
+        deltat_distrib=init_deltat_distrib(loader, ticker, BIN_EDGES, offset, rng),
+        probabilities=probabilities,
+        event_distrib=event_distrib,
         order_volumes_distrib=init_conditional_order_volumes_distrib(
             loader, ticker, BIN_EDGES, rng
         ),
         imbalance_bins=BIN_EDGES[:-1],
-        offset=offset,
         rng=rng,
     )
 
@@ -384,7 +400,7 @@ def init_alpha(params: dict, rng: np.random.Generator) -> Alpha:
         case "imbalance":
             return ImbalanceAlpha()
         case "imbalance_with_jumps":
-            return ImbalanceWithJumps(params["params"]["lamda"], init_race(params["params"]["race_params"], rng=rng), rng=rng)
+            return ImbalanceWithJumps(**params["params"], rng=rng)
 
 def init_race(
     params: dict, loader: QRParams, ticker: str, rng: np.random.Generator
@@ -406,6 +422,11 @@ def init_external_event(params: dict, loader: QRParams, ticker: str, rng: np.ran
             return NoEvent()
         case "exp_event":
             return ExpEvent(**params["params"], order_volumes_distrib=order_volumes_distrib, rng=rng)
+        case "gamma_event":
+            return GammaEvent(**params["params"], order_volumes_distrib=order_volumes_distrib, rng=rng)
+
+def init_impact(params: dict) -> SQRTImpact:
+    return SQRTImpact(**params)
 
 def parse_config(
     config: dict, loader: QRParams, model_rng: np.random.Generator
@@ -418,6 +439,7 @@ def parse_config(
         ),
         "race_model": init_race(config["race_model"], loader, config["ticker"], model_rng),
         "external_event_model": init_external_event(config["external_event_model"], loader, config["ticker"], model_rng), 
+        "impact_model": init_impact(config["impact_model"]),
         "trader": init_trader(config["trader"]),
     }
 

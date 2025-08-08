@@ -1,11 +1,16 @@
 [project]
-name = "Queue Reactive for Fast Markets"
+name = "queue_reactive_for_fast_markets"
 version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "ipykernel>=6.30.1",
+    "jupyter>=1.1.1",
+    "jupyter-black>=0.4.0",
     "matplotlib>=3.10.5",
     "numpy>=2.3.2",
+    "pandas>=2.3.1",
     "polars>=1.32.1",
+    "pyarrow>=21.0.0",
     "sortedcontainers>=2.4.0",
 ]

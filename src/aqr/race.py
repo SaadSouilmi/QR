@@ -1,12 +1,24 @@
-from copy import deepcopy
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from typing import Iterable
 
 import numpy as np
 
-from .orderbook import LimitOrderBook, Order, Side, Add, Cancel, TradeAdd, Trade
-from .distributions import ExpDistribution, GammaDistribution, DiscreteDistribution
 from .alpha import Alpha
+from .distributions import (
+    DiscreteDistribution,
+    ExpDistribution,
+    GammaDistribution,
+)
+from .orderbook import (
+    Add,
+    Cancel,
+    LimitOrderBook,
+    Order,
+    Side,
+    Trade,
+    TradeAdd,
+)
 
 
 class Race(ABC):
@@ -18,27 +30,32 @@ class Race(ABC):
     def sample_race(self, lob: LimitOrderBook, alpha: float) -> list[Order]:
         raise NotImplementedError
 
+
 class NoRace(Race):
     def __init__(self) -> None:
         pass
 
     def sample_deltat(self) -> int:
         return float("inf")
-    
+
     def probability(self, lob: LimitOrderBook, alpha: float) -> float:
         return -1
 
     def sample_race(self, lob: LimitOrderBook, alpha: float) -> list[Order]:
         raise NotImplementedError
 
+
 class SimpleRace(Race):
 
     def __init__(
         self,
         race_id: int,
-        theta_N: float,
-        theta_p: float,
-        alpha_threshold: float,
+        p_min: float,
+        p_max: float,
+        theta_min: float,
+        theta_max: float,
+        alpha_lower: float,
+        alpha_upper: float,
         max_spread: int,
         order_volumes_distrib: dict[str, DiscreteDistribution],
         event_weights: list[float],
@@ -46,28 +63,51 @@ class SimpleRace(Race):
         rng: np.random.Generator,
     ) -> None:
         self.race_id = race_id
-        self.theta_N = theta_N
-        self.theta_p = theta_p
-        self.alpha_threshold = alpha_threshold
+        self.p_min = p_min
+        self.p_max = p_max
+        self.theta_min = theta_min
+        self.theta_max = theta_max
+        self.alpha_lower = alpha_lower
+        self.alpha_upper = alpha_upper
         self.max_spread = max_spread
         self.order_volumes_distrib = order_volumes_distrib
         self.event_weights = event_weights
-        self.full_alpha = full_alpha
+        self.full_alpha = full_alpha  # whether to use alpha.value or alpha.eps
         self.rng = rng
 
     def probability(self, lob: LimitOrderBook, alpha: Alpha) -> float:
-        if self.full_alpha:
-            race_cond = (
-                np.abs(alpha.value) >= self.alpha_threshold and lob.spread <= self.max_spread
+        race_cond = (
+            lob.spread <= self.max_spread
+            and np.abs(alpha.value if self.full_alpha else alpha.eps)
+            >= self.alpha_lower
+        )
+        p = race_cond * (
+            self.p_min
+            + (self.p_max - self.p_min)
+            * (
+                np.abs(alpha.value if self.full_alpha else alpha.eps)
+                - self.alpha_lower
             )
-        else:
-            race_cond = (
-                np.abs(alpha.eps) >= self.alpha_threshold and lob.spread <= self.max_spread
-            )
-        return self.theta_p * race_cond
+            / (self.alpha_upper - self.alpha_lower)
+        )
+
+        return min(p, self.p_max)
 
     def sample_race(self, lob: LimitOrderBook, alpha: Alpha) -> list[Order]:
-        n = self.rng.geometric(p=self.theta_N)
+        race_cond = (
+            np.abs(alpha.value if self.full_alpha else alpha.eps)
+            >= self.alpha_lower
+        )
+        theta = self.theta_max + race_cond * (
+            self.theta_min - self.theta_max
+        ) * (
+            np.abs(alpha.value if self.full_alpha else alpha.eps)
+            - self.alpha_lower
+        ) / (
+            self.alpha_upper - self.alpha_lower
+        )
+        theta = max(theta, self.theta_min)
+        n = self.rng.geometric(p=theta)
         if self.full_alpha:
             side = Side.B if alpha.value < 0 else Side.A
         else:
@@ -80,7 +120,11 @@ class SimpleRace(Race):
             order_type(
                 side=side,
                 price=price,
-                size=self.order_volumes_distrib[{"Trd_Add": "Trd", "Can": "Can"}[order_type.action]].sample().item(),
+                size=self.order_volumes_distrib[
+                    {"Trd_Add": "Trd", "Can": "Can"}[order_type.action]
+                ]
+                .sample()
+                .item(),
                 race=self.race_id,
                 spread=lob.spread,
                 imbalance=lob.imbalance,
@@ -92,28 +136,35 @@ class SimpleRace(Race):
         ]
         return orders
 
+
 class ExternalEvent(ABC):
     @abstractmethod
     def sample_deltat(self) -> int:
         raise NotImplementedError
-    
+
     @abstractmethod
     def probability(self, lob: LimitOrderBook) -> int:
         raise NotImplementedError
-    
+
     @abstractmethod
-    def sample_orders(self, lob: LimitOrderBook, alpha: float) -> Order | Iterable[Order]:
+    def sample_orders(
+        self, lob: LimitOrderBook, alpha: float
+    ) -> Order | Iterable[Order]:
         raise NotImplementedError
+
 
 class NoEvent(ExternalEvent):
     def sample_deltat(self) -> int:
         return float("inf")
-    
+
     def probability(self, lob: LimitOrderBook) -> int:
         return -1
 
-    def sample_orders(self, lob: LimitOrderBook, alpha: float) -> Order | Iterable[Order]:
+    def sample_orders(
+        self, lob: LimitOrderBook, alpha: float
+    ) -> Order | Iterable[Order]:
         raise NotImplemented
+
 
 class ExpEvent(ExternalEvent):
 
@@ -143,9 +194,15 @@ class ExpEvent(ExternalEvent):
     def probability(self, lob: LimitOrderBook) -> int:
         return self.theta_p * (lob.spread == 1)
 
-    def sample_orders(self, lob: LimitOrderBook, alpha: float) -> Order | Iterable[Order]:
+    def sample_orders(
+        self, lob: LimitOrderBook, alpha: float
+    ) -> Order | Iterable[Order]:
         n = self.rng.geometric(p=self.theta_N)
-        side = Side.A if self.rng.uniform() < 0.5*(1 + self.imb_corr * lob.imbalance) else Side.B
+        side = (
+            Side.A
+            if self.rng.uniform() < 0.5 * (1 + self.imb_corr * lob.imbalance)
+            else Side.B
+        )
         price = lob.best_bid_price if side is Side.B else lob.best_ask_price
         order_types = self.rng.choice(
             a=[TradeAdd, Cancel], size=n, p=self.event_weights

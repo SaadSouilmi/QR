@@ -17,30 +17,7 @@ import matplotlib.pyplot as plt
 import polars as pl
 import numpy as np
 
-
-def pl_select(condlist: list[pl.Expr], choicelist: list[pl.Expr]) -> pl.Expr:
-    """Implement numpy's select functionality for Polars expressions.
-
-    This function provides similar functionality to numpy.select() but for Polars
-    expressions, allowing conditional selection based on multiple conditions.
-
-    Args:
-        condlist (list[pl.Expr]): List of conditions as Polars expressions
-        choicelist (list[pl.Expr]): List of values to choose from when conditions are met
-
-    Returns:
-        pl.Expr: A Polars expression that evaluates to values from choicelist based on
-            the first condition in condlist that evaluates to True
-
-    Note:
-        Similar to numpy.select (https://numpy.org/doc/stable/reference/generated/numpy.select.html)
-        but implemented for Polars expressions
-    """
-    return reduce(
-        lambda expr, cond_choice: expr.when(cond_choice[0]).then(cond_choice[1]),
-        zip(condlist, choicelist),
-        pl.when(condlist[0]).then(choicelist[0]),
-    )
+from .utils import pl_select
 
 
 def v1_estimation(df: pl.LazyFrame, n_bins: int = 10) -> pl.LazyFrame:

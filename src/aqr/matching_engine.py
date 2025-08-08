@@ -145,49 +145,6 @@ class MatchingEngine:
         order.xt = curr_ts + self.l1
         order.dt = order.xt + self.delta.sample().item() + self.l2
 
-    def process_marketable_limit_order(self, order: Order) -> Order | None:
-        if order.action == "Can":
-            return order, Add(**(vars(order) | {"rejected": True}))
-
-        limit_order_side = Side.B if order.side == Side.A else Side.A
-        can_trade = (
-            order.side == Side.B and order.price == self.lob.best_bid_price
-        ) or (order.side == Side.A and order.price == self.lob.best_ask_price)
-
-        if not can_trade:
-            limit_order_size = order.size
-            market_order_size = 0
-        else:
-            market_order_size = (
-                self.lob.best_bid_volume
-                if order.side == Side.B
-                else self.lob.best_ask_volume
-            )
-            market_order_size = min(market_order_size, order.size)
-            limit_order_size = order.size - market_order_size
-
-        market_order_rejected = market_order_size == 0
-        limit_order_rejected = limit_order_size == 0
-
-        market_order = Trade(
-            **(
-                vars(order)
-                | {"size": market_order_size, "rejected": market_order_rejected}
-            )
-        )
-        limit_order = Add(
-            **(
-                vars(order)
-                | {
-                    "size": limit_order_size,
-                    "side": limit_order_side,
-                    "rejected": limit_order_rejected,
-                }
-            )
-        )
-
-        return market_order, limit_order
-
     def process_race(self, orders: List[Order], curr_ts: int) -> List[Order]:
         gammas = self.gamma.sample(n=len(orders))
         gammas.sort()

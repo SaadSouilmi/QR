@@ -1,8 +1,7 @@
-from enum import Enum
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
 
-import numpy as np
 from sortedcontainers import SortedDict
 
 from .distributions import Distribution
@@ -21,11 +20,11 @@ class LimitOrderBook:
 
     def __post_init__(self) -> None:
         for i in range(1, 4):
-            if not self.best_bid_price - i in self.bid:
+            if self.best_bid_price - i not in self.bid:
                 self.bid[self.best_bid_price - i] = (
                     self.inv_distributions[-i - 1].sample().item()
                 )
-            if not self.best_ask_price + i in self.ask:
+            if self.best_ask_price + i not in self.ask:
                 self.ask[self.best_ask_price + i] = (
                     self.inv_distributions[i + 1].sample().item()
                 )
@@ -58,31 +57,27 @@ class LimitOrderBook:
 
     @property
     def mid_price(self) -> float:
-        return (self.best_bid[0] + self.best_ask[0]) / 2
+        return (self.best_bid_price + self.best_ask_price) / 2
 
     def resolve_order_type(self, order: "Order") -> "Order":
+        order.bid_event = dict(self.bid)
+        order.ask_event = dict(self.ask)
         if order.rejected:
             return order
-        
-        order_args = dict( # Probably should replace this with vars
-            side=order.side,
-            ts=order.ts,
-            xt=order.xt,
-            dt=order.dt,
-            price=order.price,
-            size=order.size,
-            imbalance=order.imbalance,
-            spread=order.spread,
-            alpha=order.alpha,
-            ask=order.ask,
-            bid=order.bid,
-            partial=order.partial,
-            rejected=order.rejected,
-            race=order.race,
-            trader_id=order.trader_id,
-        )
+
+        order_args = vars(order).copy()
+
         if isinstance(order, Add):
-            if (order.side is Side.B and order.price not in self.bid) or (
+            if (order.side is Side.B and order.price in self.ask) or (
+                order.side is Side.A and order.price in self.bid
+            ):
+                match order.side:
+                    case Side.B:
+                        return Trade(**(order_args | {"price": self.best_ask_price}))
+                    case Side.A:
+                        return Trade(**(order_args | {"price": self.best_bid_price}))
+
+            elif (order.side is Side.B and order.price not in self.bid) or (
                 order.side is Side.A and order.price not in self.ask
             ):
                 match order.side:
@@ -90,6 +85,12 @@ class LimitOrderBook:
                         return Create_Bid(**order_args)
                     case Side.A:
                         return Create_Ask(**order_args)
+
+        elif isinstance(order, (Create_Ask, Create_Bid)):
+            if (order.side is Side.B and order.price in self.bid) or (
+                order.side is Side.A and order.price in self.ask
+            ):
+                return Add(**order_args)
             elif (order.side is Side.B and order.price in self.ask) or (
                 order.side is Side.A and order.price in self.bid
             ):
@@ -98,16 +99,7 @@ class LimitOrderBook:
                         return Trade(**(order_args | {"price": self.best_ask_price}))
                     case Side.A:
                         return Trade(**(order_args | {"price": self.best_bid_price}))
-            
-        elif isinstance(order, (Create_Ask, Create_Bid)):
-            if (order.side is Side.B and order.price in self.bid) or (order.side is Side.A and order.price in self.ask):
-                return Add(**order_args)
-            elif (order.side is Side.B and order.price in self.ask) or (order.side is Side.A and order.price in self.bid):
-                match order.side:
-                    case Side.B:
-                        return Trade(**(order_args | {"price": self.best_ask_price}))
-                    case Side.A:
-                        return Trade(**(order_args | {"price": self.best_bid_price}))
+
         return order
 
     def process_order(self, order: "Order") -> "Order":
@@ -123,15 +115,15 @@ class LimitOrderBook:
                 self.inv_distributions[-1].sample().item()
             )
             del self.bid[self.best_bid_price]
-        if not self.best_bid_price - 1 in self.bid:
+        if self.best_bid_price - 1 not in self.bid:
             self.bid[self.best_bid_price - 1] = (
                 self.inv_distributions[-2].sample().item()
             )
-        if not self.best_bid_price - 2 in self.bid:
+        if self.best_bid_price - 2 not in self.bid:
             self.bid[self.best_bid_price - 2] = (
                 self.inv_distributions[-3].sample().item()
             )
-        if not self.best_bid_price - 3 in self.bid:
+        if self.best_bid_price - 3 not in self.bid:
             self.bid[self.best_bid_price - 3] = (
                 self.inv_distributions[-4].sample().item()
             )
@@ -144,15 +136,15 @@ class LimitOrderBook:
                 self.inv_distributions[1].sample().item()
             )
             del self.ask[self.best_ask_price]
-        if not self.best_ask_price + 1 in self.ask:
+        if self.best_ask_price + 1 not in self.ask:
             self.ask[self.best_ask_price + 1] = (
                 self.inv_distributions[2].sample().item()
             )
-        if not self.best_ask_price + 2 in self.ask:
+        if self.best_ask_price + 2 not in self.ask:
             self.ask[self.best_ask_price + 2] = (
                 self.inv_distributions[3].sample().item()
             )
-        if not self.best_ask_price + 3 in self.ask:
+        if self.best_ask_price + 3 not in self.ask:
             self.ask[self.best_ask_price + 3] = (
                 self.inv_distributions[4].sample().item()
             )
@@ -162,32 +154,34 @@ class LimitOrderBook:
 class Order(ABC):
     side: Side
     price: int
-    spread: int # At order creation
-    imbalance: float # At order creation
-    alpha: float   # At order creation 
-    ask: SortedDict
-    bid: SortedDict
+    spread: int  # At creation
+    imbalance: float  # At creation
+    alpha: float  # At creation
+    ask_sent: SortedDict = None  # At creation
+    bid_sent: SortedDict = None  # At creation
+    ask_event: SortedDict = None  # At execution
+    bid_event: SortedDict = None  # At execution
     size: int = 1
     ts: int = 0  # timestamp order was sent at
     xt: int = 0  # timestamp order was received by matching engine
     dt: int = 0  # timestamp update reaches market participants
-    partial: bool = False  # whether the order wall partiall filled
-    rejected: bool = False  # whether the order was rejected all together
-    race: int = 0  # whether the order is from a race
-    trader_id: int = 0  # trader id 1 for informed trader and 0 for other participants
+    partial: bool = False
+    rejected: bool = False
+    race: int = 0  # race_id 0 for no race
+    trader_id: int = 0
 
     @property
     @abstractmethod
     def action(self) -> str:
-        raise NotImplemented
+        raise NotImplementedError
 
     @abstractmethod
     def apply_bid(self, lob: LimitOrderBook) -> None:
-        raise NotImplemented
+        raise NotImplementedError
 
     @abstractmethod
     def apply_ask(self, lob: LimitOrderBook) -> None:
-        raise NotImplemented
+        raise NotImplementedError
 
     def apply_order(self, lob: LimitOrderBook) -> None:
         match self.side:
@@ -197,29 +191,24 @@ class Order(ABC):
                 self.apply_ask(lob)
 
 
-# class OrderType(Enum):
-#     Add = "Add"
-#     Cancel = "Can"
-#     Trade = "Trd"
-#     Trade_All = "Trd_All"
-#     Create_Ask = "Create_Ask"
-#     Create_Bid = "Create_Bid"
-
-
-@dataclass
 class Add(Order):
-    action: str = "Add"
+    action = "Add"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
+        if self.rejected:
+            return
+
         lob.bid[self.price] += self.size
 
     def apply_ask(self, lob: LimitOrderBook) -> None:
+        if self.rejected:
+            return
+
         lob.ask[self.price] += self.size
 
 
-@dataclass
 class Cancel(Order):
-    action: str = "Can"
+    action = "Can"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         if self.rejected:
@@ -250,9 +239,8 @@ class Cancel(Order):
         lob.clean_ask()
 
 
-@dataclass
 class Trade(Order):
-    action: str = "Trd"
+    action = "Trd"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         if self.rejected:
@@ -260,10 +248,7 @@ class Trade(Order):
 
         if self.price < lob.best_bid_price:
             self.rejected = True
-            return 
-            # raise ValueError(
-            #     f"Price is strictly lower than the best bid price, price={self.price}, best_bid={lob.best_bid_price}"
-            # )
+            return
 
         # This would correspond to a race where the volume as been depleted already
         if self.price not in lob.bid:
@@ -284,8 +269,7 @@ class Trade(Order):
 
         if self.price > lob.best_ask_price:
             self.rejected = True
-            return 
-            # raise ValueError(f"Price is not the best ask price, price={self.price}, best_ask={lob.best_ask_price}")
+            return
 
         # This would correspond to a race where the volume as been depleted already
         if self.price not in lob.ask:
@@ -301,9 +285,8 @@ class Trade(Order):
         lob.clean_ask()
 
 
-@dataclass
-class TradeAll(Order):
-    action: str = "Trd_All"
+class TradeAdd(Order):
+    action = "Trd_Add"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         if self.rejected:
@@ -311,10 +294,53 @@ class TradeAll(Order):
 
         if self.price < lob.best_bid_price:
             self.rejected = True
-            return 
-            # raise ValueError(
-                # f"Price is not the best bid price, price={self.price}, best_bid={lob.best_bid_price}"
-            # )
+            return
+
+        if self.price not in lob.bid:
+            lob.ask[lob.best_ask_price] += self.size
+        else:
+            lob.bid[self.price] = max(0, lob.bid[self.price] - self.size)
+            lob.ask[lob.best_ask_price] += max(0, self.size - lob.bid[self.price])
+            lob.clean_bid()
+
+    def apply_ask(self, lob: LimitOrderBook) -> None:
+        if self.rejected:
+            return
+
+        if self.price > lob.best_ask_price:
+            self.rejected = True
+            return
+
+        if self.price not in lob.ask:
+            lob.bid[lob.best_bid_price] += self.size
+        else:
+            lob.ask[self.price] -= max(0, lob.ask[self.price] - self.size)
+            lob.bid[lob.best_bid_price] += max(0, self.size - lob.ask[self.price])
+            lob.clean_ask()
+
+    def adjust_price(self, lob: LimitOrderBook) -> None:
+        if self.side is Side.B:  # Buy order
+            if self.price < lob.best_bid_price:
+                self.price = lob.best_bid_price
+            elif self.price > lob.best_ask_price:
+                self.price = lob.best_ask_price
+        elif self.side is Side.A:  # Sell order  
+            if self.price > lob.best_ask_price:
+                self.price = lob.best_ask_price
+            elif self.price < lob.best_bid_price:
+                self.price = lob.best_bid_price
+
+
+class TradeAll(Order):
+    action = "Trd_All"
+
+    def apply_bid(self, lob: LimitOrderBook) -> None:
+        if self.rejected:
+            return
+
+        if self.price < lob.best_bid_price:
+            self.rejected = True
+            return
 
         # This would correspond to a race where the volume as been depleted already
         if self.price not in lob.bid:
@@ -330,10 +356,7 @@ class TradeAll(Order):
 
         if self.price > lob.best_ask_price:
             self.rejected = True
-            return 
-            # raise ValueError(
-            #     f"Price is not the best ask price, price={self.price}, best_ask={lob.best_ask_price}"
-            # )
+            return
 
         # This would correspond to a race where the volume as been depleted already
         if self.price not in lob.ask:
@@ -344,19 +367,20 @@ class TradeAll(Order):
         lob.clean_ask()
 
 
-@dataclass
 class Create_Ask(Order):
-    action: str = "Create_Ask"
+    action = "Create_Ask"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
         raise NotImplementedError
 
     def apply_ask(self, lob: LimitOrderBook) -> None:
+        if self.rejected:
+            return
         assert (self.price not in lob.ask) and (self.price not in lob.bid)
 
         lob.ask[self.price] = self.size
         for i in range(1, 4):
-            if not self.price + i in lob.ask:
+            if self.price + i not in lob.ask:
                 lob.ask[self.price + i] = 0
 
         for price, volume in lob.ask.items()[:]:
@@ -364,16 +388,17 @@ class Create_Ask(Order):
                 del lob.ask[price]
 
 
-@dataclass
 class Create_Bid(Order):
-    action: str = "Create_Bid"
+    action = "Create_Bid"
 
     def apply_bid(self, lob: LimitOrderBook) -> None:
+        if self.rejected:
+            return
         assert (self.price not in lob.ask) and (self.price not in lob.bid)
 
         lob.bid[self.price] = self.size
         for k in range(1, 4):
-            if not self.price - k in lob.bid:
+            if self.price - k not in lob.bid:
                 lob.bid[self.price - k] = 0
 
         for price, volume in lob.bid.items()[:]:
@@ -382,3 +407,42 @@ class Create_Bid(Order):
 
     def apply_ask(self, lob: LimitOrderBook) -> None:
         raise NotImplementedError
+
+
+def process_marketable_limit_order(
+    lob: LimitOrderBook, order: Order
+) -> tuple[Order, Order]:
+    order.adjust_price(lob)
+    limit_order_side = Side.B if order.side == Side.A else Side.A
+    can_trade = (order.side == Side.B and order.price == lob.best_bid_price) or (
+        order.side == Side.A and order.price == lob.best_ask_price
+    )
+
+    if not can_trade:
+        limit_order_size = order.size
+        market_order_size = 0
+    else:
+        market_order_size = (
+            lob.best_bid_volume if order.side == Side.B else lob.best_ask_volume
+        )
+        market_order_size = min(market_order_size, order.size)
+        limit_order_size = order.size - market_order_size
+
+    market_order_rejected = market_order_size == 0
+    limit_order_rejected = limit_order_size == 0
+
+    market_order = Trade(
+        **(vars(order) | {"size": market_order_size, "rejected": market_order_rejected})
+    )
+    limit_order = Add(
+        **(
+            vars(order)
+            | {
+                "size": limit_order_size,
+                "side": limit_order_side,
+                "rejected": limit_order_rejected,
+            }
+        )
+    )
+
+    return market_order, limit_order

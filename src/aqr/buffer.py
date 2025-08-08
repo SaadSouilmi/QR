@@ -1,12 +1,12 @@
-import os 
 import datetime as dt
+import gc
+import os
 from typing import Any
-import gc 
 
 import polars as pl
 
-from .orderbook import LimitOrderBook, Order
 from .alpha import Alpha
+from .orderbook import LimitOrderBook, Order
 from .trader import Trader
 
 
